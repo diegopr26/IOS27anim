@@ -1,0 +1,85 @@
+name: Build KernelSU module
+on: [push, workflow_dispatch]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Build
+        run: |
+          set -e
+          mkdir -p overlay/res/anim module/system/product/overlay module/META-INF/com/google/android
+
+          cat > overlay/AndroidManifest.xml <<'MAN'
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android"
+              package="com.ios27.anim.overlay">
+              <overlay android:targetPackage="android" android:isStatic="true" android:priority="99" />
+              <application android:hasCode="false" />
+          </manifest>
+          MAN
+
+          mk() {
+          cat > overlay/res/anim/$1.xml <<ANIM
+          <?xml version="1.0" encoding="utf-8"?>
+          <set xmlns:android="http://schemas.android.com/apk/res/android"
+              android:shareInterpolator="false">
+              <alpha android:interpolator="@android:interpolator/linear"
+                  android:duration="500" android:fillEnabled="true"
+                  android:fillBefore="true" android:fillAfter="true"
+                  android:fromAlpha="1.0" android:toAlpha="1.0" />
+              <translate android:interpolator="@android:interpolator/decelerate_quint"
+                  android:duration="500" android:fillEnabled="true"
+                  android:fillBefore="true" android:fillAfter="true"
+                  android:fromXDelta="$2" android:toXDelta="$3" />
+          </set>
+          ANIM
+          }
+          mk activity_open_enter  "100%p"  "0"
+          mk activity_open_exit   "0"      "-30%p"
+          mk activity_close_enter "-30%p"  "0"
+          mk activity_close_exit  "0"      "100%p"
+
+          cat > module/module.prop <<'PROP'
+          id=ios27_anim_overlay
+          name=iOS 27 Animations (One UI 8)
+          version=v1.0
+          versionCode=1
+          author=diegopr26
+          description=iOS-style push/pop app transitions via a systemless overlay. Reboot after install.
+          PROP
+
+          cat > module/customize.sh <<'CUST'
+          SKIPUNZIP=0
+          ui_print "- iOS 27 animations overlay"
+          ui_print "- Reboot to apply"
+          set_perm_recursive $MODPATH 0 0 0755 0644
+          CUST
+
+          cat > module/META-INF/com/google/android/update-binary <<'UPD'
+          #!/sbin/sh
+          umask 022
+          OUTFD=$2
+          if [ -f /data/adb/magisk/util_functions.sh ]; then
+            . /data/adb/magisk/util_functions.sh
+            install_module
+            exit 0
+          fi
+          echo "ui_print Install from the root manager" > /proc/self/fd/$OUTFD
+          exit 1
+          UPD
+          echo "#MAGISK" > module/META-INF/com/google/android/updater-script
+
+          BT=$(ls -d $ANDROID_HOME/build-tools/* | sort -V | tail -1)
+          PL=$(ls -d $ANDROID_HOME/platforms/android-* | sort -V | tail -1)
+          $BT/aapt2 compile --dir overlay/res -o /tmp/c.zip
+          $BT/aapt2 link -o /tmp/o.apk -I $PL/android.jar --manifest overlay/AndroidManifest.xml /tmp/c.zip
+          keytool -genkeypair -keystore /tmp/k.jks -storepass android -keypass android \
+            -alias k -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=ios27"
+          $BT/zipalign -f 4 /tmp/o.apk /tmp/oa.apk
+          $BT/apksigner sign --ks /tmp/k.jks --ks-pass pass:android --key-pass pass:android \
+            --out module/system/product/overlay/iOS27AnimOverlay.apk /tmp/oa.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: iOS27-Animations-KernelSU
+          path: module/
